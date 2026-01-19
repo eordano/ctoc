@@ -1,0 +1,11 @@
+# Use Bzlmod
+common --enable_bzlmod
+
+# Python hermetic toolchain
+build --@rules_python//python/config_settings:python_version=3.12
+
+# Better error messages
+build --verbose_failures
+
+# Performance
+build --experimental_remote_merkle_tree_cache
