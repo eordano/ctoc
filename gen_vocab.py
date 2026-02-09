@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate vocab_data.cc and vocab_data.h from vocab_tiktoken.json.
+"""Generate vocab_data.cc and vocab_data.h from vocab.json.
 
 Reads the "verified" array from the vocab JSON and emits a C++ source file
 containing the token strings as a compile-time array, so the binary is

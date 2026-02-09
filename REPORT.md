@@ -241,7 +241,7 @@ ctoc.cc               Single-file C++17 CLI (~500 lines)
   print_summary()       cloc-style formatted output
   print_by_file()       Per-file formatted output
 
-vocab_tiktoken.json   Vocabulary: {"verified": [...], "checked": [...]}
+vocab.json            Vocabulary: {"verified": [...], "checked": [...]}
 
 MODULE.bazel          Bazel build config (hermetic_cc_toolchain / zig c++)
 BUILD.bazel           cc_binary target
@@ -284,7 +284,7 @@ python extract_vocab.py
 python -c "
 from tokenizer import greedy_tokenize
 import json
-vocab = set(json.load(open('vocab_tiktoken.json'))['verified'])
+vocab = set(json.load(open('vocab.json'))['verified'])
 text = 'Hello, world!'
 tokens = greedy_tokenize(text, vocab)
 print(f'{len(tokens)} tokens: {tokens}')
