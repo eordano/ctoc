@@ -56,11 +56,23 @@ def get_baseline() -> int:
     return _baseline
 
 
+# Sandwich baseline: count_tokens_raw("§§") — two non-merging markers
+_sandwich_baseline = None
+
 def count_tokens(text: str) -> int:
-    """Get token count for just the text, minus message overhead."""
+    """Get token count for just the text, minus message overhead.
+
+    Uses § sandwich to handle varying baselines across character types.
+    The API framing overhead differs for letters, digits, CJK, etc.
+    Sandwiching between § markers normalizes this: count(§text§) - count(§§).
+    """
+    global _sandwich_baseline
     if not text:
         return 0
-    return count_tokens_raw(text) - get_baseline()
+    if _sandwich_baseline is None:
+        _sandwich_baseline = count_tokens_raw("§§")
+    sandwiched = count_tokens_raw("§" + text + "§")
+    return sandwiched - _sandwich_baseline
 
 
 def is_boundary(s: str, i: int, total_count: int | None = None) -> bool:
@@ -182,3 +194,84 @@ def load_vocab(vocab: set[str]):
     """Load a vocabulary set."""
     global _known_vocab
     _known_vocab = vocab.copy()
+
+
+def optimal_tokenize(text: str, vocab: set[str]) -> list[str]:
+    """
+    Find the minimum-token segmentation using dynamic programming.
+
+    Unlike greedy longest-match, this finds the globally optimal split
+    that minimizes the total number of tokens. Much closer to BPE output.
+
+    Time: O(n * max_token_len), Space: O(n)
+    """
+    if not text:
+        return []
+
+    n = len(text)
+    max_len = max(len(t) for t in vocab) if vocab else 0
+
+    # dp[i] = minimum tokens to cover text[0:i]
+    INF = float("inf")
+    dp = [INF] * (n + 1)
+    dp[0] = 0
+    parent = [0] * (n + 1)  # parent[i] = start position of the token ending at i
+
+    for i in range(1, n + 1):
+        # Try every possible token ending at position i
+        for length in range(1, min(max_len, i) + 1):
+            j = i - length
+            candidate = text[j:i]
+            if candidate in vocab and dp[j] + 1 < dp[i]:
+                dp[i] = dp[j] + 1
+                parent[i] = j
+
+        # Fallback: single character (always possible)
+        if dp[i - 1] + 1 < dp[i]:
+            dp[i] = dp[i - 1] + 1
+            parent[i] = i - 1
+
+    # Reconstruct tokens
+    tokens = []
+    pos = n
+    while pos > 0:
+        start = parent[pos]
+        tokens.append(text[start:pos])
+        pos = start
+
+    tokens.reverse()
+    return tokens
+
+
+def greedy_tokenize(text: str, vocab: set[str]) -> list[str]:
+    """
+    Local greedy longest-match tokenizer using a given vocab set.
+
+    Used for skip-match optimization: tokenize locally, then only
+    boundary-find texts where local count != API count.
+    """
+    if not text:
+        return []
+
+    # Build sorted list by length descending for greedy matching
+    # Use a trie-like approach: group by max token length for efficiency
+    max_len = max(len(t) for t in vocab) if vocab else 0
+
+    tokens = []
+    pos = 0
+    while pos < len(text):
+        # Try longest match first
+        matched = False
+        for length in range(min(max_len, len(text) - pos), 0, -1):
+            candidate = text[pos:pos + length]
+            if candidate in vocab:
+                tokens.append(candidate)
+                pos += length
+                matched = True
+                break
+        if not matched:
+            # Unknown char — emit single character as its own token
+            tokens.append(text[pos])
+            pos += 1
+
+    return tokens
