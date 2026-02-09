@@ -5,6 +5,7 @@
 // vocabulary of 36,495 verified Claude tokens (95-96% accuracy).
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -174,6 +175,9 @@ static std::vector<FileEntry> discover_files(
 
         if (fs::is_regular_file(p, ec)) {
             // Single file — always process even if extension unknown
+            auto fsize = fs::file_size(p, ec);
+            if (ec || fsize > MAX_FILE_SIZE)
+                continue;
             std::string ext = get_ext(p);
             if (!include_exts.empty() && include_exts.find(ext) == include_exts.end())
                 continue;
@@ -400,6 +404,12 @@ int main(int argc, char* argv[]) {
             extra_excluded_dirs.insert(argv[++i]);
         } else if (arg == "--include-ext" && i + 1 < argc) {
             std::string ext = argv[++i];
+            if (ext.empty()) {
+                std::cerr << "ctoc: --include-ext requires a non-empty extension\n";
+                return 1;
+            }
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             if (ext[0] != '.')
                 ext = "." + ext;
             include_exts.insert(ext);

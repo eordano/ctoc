@@ -1,4 +1,4 @@
-load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_test")
 
 genrule(
     name = "gen_vocab",
@@ -18,4 +18,10 @@ cc_binary(
         "vocab_data.cc",
         "vocab_data.h",
     ],
+)
+
+cc_test(
+    name = "ctoc_smoke_test",
+    size = "small",
+    srcs = ["ctoc_smoke_test.cc"],
 )
