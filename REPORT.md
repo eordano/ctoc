@@ -232,23 +232,20 @@ These aren't bugs in the API — they likely reflect preprocessing in Claude's m
 ### 8. Architecture
 
 ```
-tokenizer.py          Core API wrapper
-  count_tokens()        § sandwich method (fixed baseline)
-  count_tokens_raw()    Raw API call (cached)
-  greedy_tokenize()     Offline tokenizer using extracted vocab
-  optimal_tokenize()    DP minimum-token segmentation
-  find_boundaries_linear()  O(n) boundary detection
+ctoc.cc               Single-file C++17 CLI (~500 lines)
+  main()                Argparse, orchestrate, print table
+  Trie                  Vocabulary stored as a trie for O(n) tokenization
+  count_tokens()        Greedy longest-match walk over trie
+  discover_files()      std::filesystem recursive directory traversal
+  detect_language()     Extension -> language name mapping
+  print_summary()       cloc-style formatted output
+  print_by_file()       Per-file formatted output
 
-extract_vocab.py      Multi-phase extraction pipeline
-  Phase 1:  tiktoken cross-reference (cl100k, o200k, gpt2)
-  Phase 1b: HuggingFace tokenizer cross-reference
-  Phase 1c: Common English words
-  Phase 4:  Targeted token extension
+vocab_tiktoken.json   Vocabulary: {"verified": [...], "checked": [...]}
 
-unicode_crossref.py   Unicode-focused HuggingFace extraction
-reverify_vocab.py     Full vocabulary re-verification
-
-vocab_tiktoken.json   Checkpoint: {"verified": [...], "checked": [...]}
+MODULE.bazel          Bazel build config (hermetic_cc_toolchain / zig c++)
+BUILD.bazel           cc_binary target
+.bazelrc              C++17 flags, cross-compilation platform configs
 ```
 
 ### 9. Limitations and Future Work

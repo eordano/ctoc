@@ -1,0 +1,14 @@
+common --enable_platform_specific_config
+
+build:linux --sandbox_add_mount_pair=/tmp
+build:macos --sandbox_add_mount_pair=/var/tmp
+
+build --action_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+build --cxxopt=-std=c++17
+build --host_cxxopt=-std=c++17
+
+# Cross-compilation
+build:linux_amd64 --platforms=@zig_sdk//platform:linux_amd64
+build:linux_arm64 --platforms=@zig_sdk//platform:linux_arm64
+build:macos_amd64 --platforms=@zig_sdk//platform:darwin_amd64
+build:macos_arm64 --platforms=@zig_sdk//platform:darwin_arm64

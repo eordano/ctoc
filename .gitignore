@@ -1,3 +1,3 @@
-.venv/
 bazel-*
-__pycache__/
+*.jsonl
+*.pt

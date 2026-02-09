@@ -1,0 +1,7 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+cc_binary(
+    name = "ctoc",
+    srcs = ["ctoc.cc"],
+    data = ["vocab_tiktoken.json"],
+)
