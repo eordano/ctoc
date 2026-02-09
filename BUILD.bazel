@@ -1,7 +1,21 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 
+genrule(
+    name = "gen_vocab",
+    srcs = ["vocab_tiktoken.json"],
+    outs = [
+        "vocab_data.cc",
+        "vocab_data.h",
+    ],
+    cmd = "python3 $(execpath gen_vocab.py) $(execpath vocab_tiktoken.json) $(RULEDIR)/vocab_data.cc $(RULEDIR)/vocab_data.h",
+    tools = ["gen_vocab.py"],
+)
+
 cc_binary(
     name = "ctoc",
-    srcs = ["ctoc.cc"],
-    data = ["vocab_tiktoken.json"],
+    srcs = [
+        "ctoc.cc",
+        "vocab_data.cc",
+        "vocab_data.h",
+    ],
 )

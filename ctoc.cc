@@ -16,105 +16,11 @@
 #include <unordered_set>
 #include <vector>
 
+#include "vocab_data.h"
+
 namespace fs = std::filesystem;
 
-// ─── Language detection ──────────────────────────────────────────────
-
-static const std::unordered_map<std::string, std::string> EXT_TO_LANG = {
-    {".py", "Python"},
-    {".pyi", "Python"},
-    {".js", "JavaScript"},
-    {".mjs", "JavaScript"},
-    {".cjs", "JavaScript"},
-    {".jsx", "JavaScript"},
-    {".ts", "TypeScript"},
-    {".tsx", "TypeScript"},
-    {".java", "Java"},
-    {".kt", "Kotlin"},
-    {".kts", "Kotlin"},
-    {".scala", "Scala"},
-    {".c", "C"},
-    {".h", "C/C++ Header"},
-    {".cc", "C++"},
-    {".cpp", "C++"},
-    {".cxx", "C++"},
-    {".hpp", "C++ Header"},
-    {".hxx", "C++ Header"},
-    {".cs", "C#"},
-    {".go", "Go"},
-    {".rs", "Rust"},
-    {".rb", "Ruby"},
-    {".php", "PHP"},
-    {".swift", "Swift"},
-    {".m", "Objective-C"},
-    {".mm", "Objective-C++"},
-    {".r", "R"},
-    {".R", "R"},
-    {".lua", "Lua"},
-    {".pl", "Perl"},
-    {".pm", "Perl"},
-    {".sh", "Shell"},
-    {".bash", "Shell"},
-    {".zsh", "Shell"},
-    {".fish", "Shell"},
-    {".ps1", "PowerShell"},
-    {".dart", "Dart"},
-    {".ex", "Elixir"},
-    {".exs", "Elixir"},
-    {".erl", "Erlang"},
-    {".hrl", "Erlang"},
-    {".hs", "Haskell"},
-    {".ml", "OCaml"},
-    {".mli", "OCaml"},
-    {".fs", "F#"},
-    {".fsx", "F#"},
-    {".clj", "Clojure"},
-    {".cljs", "ClojureScript"},
-    {".vim", "Vim Script"},
-    {".el", "Emacs Lisp"},
-    {".sql", "SQL"},
-    {".html", "HTML"},
-    {".htm", "HTML"},
-    {".css", "CSS"},
-    {".scss", "SCSS"},
-    {".sass", "Sass"},
-    {".less", "Less"},
-    {".xml", "XML"},
-    {".xsl", "XML"},
-    {".json", "JSON"},
-    {".yaml", "YAML"},
-    {".yml", "YAML"},
-    {".toml", "TOML"},
-    {".ini", "INI"},
-    {".cfg", "INI"},
-    {".md", "Markdown"},
-    {".markdown", "Markdown"},
-    {".rst", "reStructuredText"},
-    {".tex", "TeX"},
-    {".latex", "TeX"},
-    {".proto", "Protocol Buffers"},
-    {".graphql", "GraphQL"},
-    {".gql", "GraphQL"},
-    {".tf", "Terraform"},
-    {".hcl", "HCL"},
-    {".dockerfile", "Dockerfile"},
-    {".cmake", "CMake"},
-    {".make", "Makefile"},
-    {".mk", "Makefile"},
-    {".gradle", "Gradle"},
-    {".sbt", "sbt"},
-    {".zig", "Zig"},
-    {".nim", "Nim"},
-    {".v", "V"},
-    {".jl", "Julia"},
-    {".ipynb", "Jupyter Notebook"},
-    {".vue", "Vue"},
-    {".svelte", "Svelte"},
-    {".astro", "Astro"},
-    {".sol", "Solidity"},
-    {".wasm", "WebAssembly"},
-    {".wat", "WebAssembly"},
-};
+// ─── Defaults ────────────────────────────────────────────────────────
 
 static const std::unordered_set<std::string> DEFAULT_EXCLUDED_DIRS = {
     ".git", ".svn", ".hg",
@@ -184,123 +90,6 @@ private:
     TrieNode* root_;
 };
 
-// ─── JSON parsing (extract "verified" string array) ──────────────────
-
-// Unescape a JSON string value (handles \n, \t, \r, \\, \", \/, \uXXXX)
-static std::string json_unescape(const std::string& s, size_t start, size_t end) {
-    std::string result;
-    result.reserve(end - start);
-    for (size_t i = start; i < end; ++i) {
-        if (s[i] == '\\' && i + 1 < end) {
-            ++i;
-            switch (s[i]) {
-                case '"':  result += '"'; break;
-                case '\\': result += '\\'; break;
-                case '/':  result += '/'; break;
-                case 'n':  result += '\n'; break;
-                case 'r':  result += '\r'; break;
-                case 't':  result += '\t'; break;
-                case 'b':  result += '\b'; break;
-                case 'f':  result += '\f'; break;
-                case 'u': {
-                    // Parse 4 hex digits
-                    if (i + 4 < end) {
-                        std::string hex = s.substr(i + 1, 4);
-                        uint32_t cp = std::stoul(hex, nullptr, 16);
-                        i += 4;
-                        // Check for surrogate pair
-                        if (cp >= 0xD800 && cp <= 0xDBFF && i + 2 < end &&
-                            s[i + 1] == '\\' && s[i + 2] == 'u') {
-                            std::string hex2 = s.substr(i + 3, 4);
-                            uint32_t cp2 = std::stoul(hex2, nullptr, 16);
-                            if (cp2 >= 0xDC00 && cp2 <= 0xDFFF) {
-                                cp = 0x10000 + ((cp - 0xD800) << 10) + (cp2 - 0xDC00);
-                                i += 6;
-                            }
-                        }
-                        // Encode as UTF-8
-                        if (cp < 0x80) {
-                            result += static_cast<char>(cp);
-                        } else if (cp < 0x800) {
-                            result += static_cast<char>(0xC0 | (cp >> 6));
-                            result += static_cast<char>(0x80 | (cp & 0x3F));
-                        } else if (cp < 0x10000) {
-                            result += static_cast<char>(0xE0 | (cp >> 12));
-                            result += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-                            result += static_cast<char>(0x80 | (cp & 0x3F));
-                        } else {
-                            result += static_cast<char>(0xF0 | (cp >> 18));
-                            result += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
-                            result += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-                            result += static_cast<char>(0x80 | (cp & 0x3F));
-                        }
-                    }
-                    break;
-                }
-                default: result += s[i]; break;
-            }
-        } else {
-            result += s[i];
-        }
-    }
-    return result;
-}
-
-// Parse the "verified" array from vocab_tiktoken.json.
-// Format: {"verified": ["token1", "token2", ...], "checked": [...]}
-static std::vector<std::string> parse_vocab(const std::string& json) {
-    std::vector<std::string> tokens;
-
-    // Find "verified"
-    size_t key_pos = json.find("\"verified\"");
-    if (key_pos == std::string::npos) {
-        std::cerr << "ctoc: vocab JSON missing \"verified\" key\n";
-        return tokens;
-    }
-
-    // Find the opening bracket of the array
-    size_t arr_start = json.find('[', key_pos);
-    if (arr_start == std::string::npos) {
-        std::cerr << "ctoc: malformed vocab JSON\n";
-        return tokens;
-    }
-
-    // Parse strings within the array
-    size_t i = arr_start + 1;
-    while (i < json.size()) {
-        // Skip whitespace and commas
-        while (i < json.size() && (json[i] == ' ' || json[i] == '\n' ||
-               json[i] == '\r' || json[i] == '\t' || json[i] == ','))
-            ++i;
-
-        if (i >= json.size() || json[i] == ']')
-            break;
-
-        if (json[i] != '"') {
-            ++i;
-            continue;
-        }
-
-        // Find end of string (handle escapes)
-        size_t str_start = i + 1;
-        size_t j = str_start;
-        while (j < json.size()) {
-            if (json[j] == '\\') {
-                j += 2;
-            } else if (json[j] == '"') {
-                break;
-            } else {
-                ++j;
-            }
-        }
-
-        tokens.push_back(json_unescape(json, str_start, j));
-        i = j + 1;
-    }
-
-    return tokens;
-}
-
 // ─── Tokenizer ───────────────────────────────────────────────────────
 
 static size_t count_tokens(const std::string& text, const Trie& trie) {
@@ -341,34 +130,14 @@ static std::string read_file(const fs::path& path) {
 
 struct FileEntry {
     fs::path path;
-    std::string language;
+    std::string ext;
     size_t tokens;
 };
 
-static std::string detect_language(const fs::path& path) {
-    // Special filenames
-    std::string filename = path.filename().string();
-    if (filename == "Makefile" || filename == "makefile" || filename == "GNUmakefile")
-        return "Makefile";
-    if (filename == "Dockerfile")
-        return "Dockerfile";
-    if (filename == "CMakeLists.txt")
-        return "CMake";
-    if (filename == "BUILD" || filename == "BUILD.bazel")
-        return "Bazel";
-    if (filename == "WORKSPACE" || filename == "WORKSPACE.bazel")
-        return "Bazel";
-    if (filename == "MODULE.bazel")
-        return "Bazel";
-
+static std::string get_ext(const fs::path& path) {
     std::string ext = path.extension().string();
-    // Convert to lowercase for matching
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-    auto it = EXT_TO_LANG.find(ext);
-    if (it != EXT_TO_LANG.end())
-        return it->second;
-    return {};
+    return ext;
 }
 
 static bool should_exclude_dir(const std::string& dirname,
@@ -405,19 +174,15 @@ static std::vector<FileEntry> discover_files(
 
         if (fs::is_regular_file(p, ec)) {
             // Single file — always process even if extension unknown
-            std::string lang = detect_language(p);
-            if (!include_exts.empty()) {
-                std::string ext = p.extension().string();
-                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                if (include_exts.find(ext) == include_exts.end())
-                    continue;
-            }
+            std::string ext = get_ext(p);
+            if (!include_exts.empty() && include_exts.find(ext) == include_exts.end())
+                continue;
             std::string content = read_file(p);
             if (content.empty() || is_binary(content))
                 continue;
-            if (lang.empty())
-                lang = "Other";
-            files.push_back({p, lang, count_tokens(content, trie)});
+            if (ext.empty())
+                ext = "(none)";
+            files.push_back({p, ext, count_tokens(content, trie)});
             continue;
         }
 
@@ -450,22 +215,18 @@ static std::vector<FileEntry> discover_files(
             if (ec || fsize > MAX_FILE_SIZE)
                 continue;
 
-            std::string lang = detect_language(it->path());
-            if (lang.empty())
+            std::string ext = get_ext(it->path());
+            if (ext.empty())
                 continue;
 
-            if (!include_exts.empty()) {
-                std::string ext = it->path().extension().string();
-                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                if (include_exts.find(ext) == include_exts.end())
-                    continue;
-            }
+            if (!include_exts.empty() && include_exts.find(ext) == include_exts.end())
+                continue;
 
             std::string content = read_file(it->path());
             if (content.empty() || is_binary(content))
                 continue;
 
-            files.push_back({it->path(), lang, count_tokens(content, trie)});
+            files.push_back({it->path(), ext, count_tokens(content, trie)});
         }
     }
 
@@ -486,31 +247,31 @@ static std::string format_number(size_t n) {
 }
 
 static void print_summary(const std::vector<FileEntry>& files) {
-    // Aggregate by language
-    struct LangStats {
+    // Aggregate by extension
+    struct ExtStats {
         size_t file_count = 0;
         size_t token_count = 0;
     };
-    std::unordered_map<std::string, LangStats> by_lang;
+    std::unordered_map<std::string, ExtStats> by_ext;
     size_t total_files = 0;
     size_t total_tokens = 0;
 
     for (const auto& f : files) {
-        by_lang[f.language].file_count++;
-        by_lang[f.language].token_count += f.tokens;
+        by_ext[f.ext].file_count++;
+        by_ext[f.ext].token_count += f.tokens;
         total_files++;
         total_tokens += f.tokens;
     }
 
     // Sort by token count descending
-    std::vector<std::pair<std::string, LangStats>> sorted(by_lang.begin(), by_lang.end());
+    std::vector<std::pair<std::string, ExtStats>> sorted(by_ext.begin(), by_ext.end());
     std::sort(sorted.begin(), sorted.end(),
               [](const auto& a, const auto& b) { return a.second.token_count > b.second.token_count; });
 
     // Calculate column widths
-    size_t lang_w = 8; // "Language"
-    for (const auto& [lang, _] : sorted)
-        lang_w = std::max(lang_w, lang.size());
+    size_t ext_w = 3; // "Ext"
+    for (const auto& [ext, _] : sorted)
+        ext_w = std::max(ext_w, ext.size());
 
     std::string files_str = format_number(total_files);
     std::string tokens_str = format_number(total_tokens);
@@ -522,25 +283,23 @@ static void print_summary(const std::vector<FileEntry>& files) {
         tokens_w = std::max(tokens_w, format_number(stats.token_count).size());
     }
 
-    size_t total_w = lang_w + 2 + files_w + 2 + tokens_w;
-    std::string line(total_w, '\xe2'); // placeholder
-    // Use simple dashes for portability
-    line = std::string(total_w, '-');
+    size_t total_w = ext_w + 2 + files_w + 2 + tokens_w;
+    std::string line(total_w, '-');
 
     std::cout << line << "\n";
-    std::cout << std::left << std::setw(lang_w) << "Language"
+    std::cout << std::left << std::setw(ext_w) << "Ext"
               << "  " << std::right << std::setw(files_w) << "files"
               << "  " << std::setw(tokens_w) << "tokens" << "\n";
     std::cout << line << "\n";
 
-    for (const auto& [lang, stats] : sorted) {
-        std::cout << std::left << std::setw(lang_w) << lang
+    for (const auto& [ext, stats] : sorted) {
+        std::cout << std::left << std::setw(ext_w) << ext
                   << "  " << std::right << std::setw(files_w) << format_number(stats.file_count)
                   << "  " << std::setw(tokens_w) << format_number(stats.token_count) << "\n";
     }
 
     std::cout << line << "\n";
-    std::cout << std::left << std::setw(lang_w) << "SUM"
+    std::cout << std::left << std::setw(ext_w) << "SUM"
               << "  " << std::right << std::setw(files_w) << format_number(total_files)
               << "  " << std::setw(tokens_w) << format_number(total_tokens) << "\n";
     std::cout << line << "\n";
@@ -557,79 +316,42 @@ static void print_by_file(const std::vector<FileEntry>& files) {
 
     // Calculate column widths
     size_t path_w = 4; // "File"
-    size_t lang_w = 8; // "Language"
+    size_t ext_w = 3;  // "Ext"
     size_t tokens_w = 6; // "tokens"
 
     size_t total_tokens = 0;
     for (const auto* f : sorted) {
         path_w = std::max(path_w, f->path.string().size());
-        lang_w = std::max(lang_w, f->language.size());
+        ext_w = std::max(ext_w, f->ext.size());
         tokens_w = std::max(tokens_w, format_number(f->tokens).size());
         total_tokens += f->tokens;
     }
 
     tokens_w = std::max(tokens_w, format_number(total_tokens).size());
 
-    size_t total_w = path_w + 2 + lang_w + 2 + tokens_w;
+    size_t total_w = path_w + 2 + ext_w + 2 + tokens_w;
     std::string line(total_w, '-');
 
     std::cout << line << "\n";
     std::cout << std::left << std::setw(path_w) << "File"
-              << "  " << std::setw(lang_w) << "Language"
+              << "  " << std::setw(ext_w) << "Ext"
               << "  " << std::right << std::setw(tokens_w) << "tokens" << "\n";
     std::cout << line << "\n";
 
     for (const auto* f : sorted) {
         std::cout << std::left << std::setw(path_w) << f->path.string()
-                  << "  " << std::setw(lang_w) << f->language
+                  << "  " << std::setw(ext_w) << f->ext
                   << "  " << std::right << std::setw(tokens_w) << format_number(f->tokens) << "\n";
     }
 
     std::cout << line << "\n";
 
     std::string sum_label = "SUM (" + std::to_string(files.size()) + " files)";
-    // Pad to fill file + language columns
-    size_t sum_pad = path_w + 2 + lang_w;
+    // Pad to fill file + ext columns
+    size_t sum_pad = path_w + 2 + ext_w;
     std::cout << std::left << std::setw(sum_pad) << sum_label
               << "  " << std::right << std::setw(tokens_w) << format_number(total_tokens) << "\n";
     std::cout << line << "\n";
-}
-
-// ─── Vocab file resolution ──────────────────────────────────────────
-
-static fs::path resolve_vocab_path(const std::string& explicit_path) {
-    if (!explicit_path.empty())
-        return fs::path(explicit_path);
-
-    // Try relative to the binary
-    std::error_code ec;
-    fs::path exe = fs::read_symlink("/proc/self/exe", ec);
-    if (ec) {
-        // macOS: try _NSGetExecutablePath or argv[0] fallback
-        // We'll handle this via the Bazel runfiles data attribute
-        // which places vocab_tiktoken.json next to the binary
-    }
-
-    // Try common locations
-    std::vector<fs::path> candidates;
-    if (!exe.empty())
-        candidates.push_back(exe.parent_path() / "vocab_tiktoken.json");
-
-    // Bazel runfiles: binary.runfiles/_main/vocab_tiktoken.json
-    if (!exe.empty()) {
-        fs::path runfiles = fs::path(exe.string() + ".runfiles") / "_main" / "vocab_tiktoken.json";
-        candidates.push_back(runfiles);
-    }
-
-    // Current directory
-    candidates.push_back(fs::current_path() / "vocab_tiktoken.json");
-
-    for (const auto& c : candidates) {
-        if (fs::exists(c, ec))
-            return c;
-    }
-
-    return "vocab_tiktoken.json";
 }
 
 // ─── Help ────────────────────────────────────────────────────────────
@@ -648,7 +370,6 @@ OPTIONS:
     --by-file            Show per-file token counts
     --exclude-dir DIR    Exclude directory name (repeatable)
     --include-ext EXT    Only include file extension, e.g. .py (repeatable)
-    --vocab PATH         Path to vocab_tiktoken.json
     --help               Show this help message
 
 EXAMPLES:
@@ -663,7 +384,6 @@ EXAMPLES:
 
 int main(int argc, char* argv[]) {
     bool by_file = false;
-    std::string vocab_path;
     std::vector<std::string> input_paths;
     std::unordered_set<std::string> extra_excluded_dirs;
     std::unordered_set<std::string> include_exts;
@@ -683,8 +403,6 @@ int main(int argc, char* argv[]) {
             if (ext[0] != '.')
                 ext = "." + ext;
             include_exts.insert(ext);
-        } else if (arg == "--vocab" && i + 1 < argc) {
-            vocab_path = argv[++i];
         } else if (arg[0] == '-') {
             std::cerr << "ctoc: unknown option: " << arg << "\n";
             std::cerr << "Try 'ctoc --help' for more information.\n";
@@ -704,24 +422,10 @@ int main(int argc, char* argv[]) {
     auto excluded_dirs = DEFAULT_EXCLUDED_DIRS;
     excluded_dirs.insert(extra_excluded_dirs.begin(), extra_excluded_dirs.end());
 
-    // Load vocab
-    fs::path vp = resolve_vocab_path(vocab_path);
-    std::string vocab_json = read_file(vp);
-    if (vocab_json.empty()) {
-        std::cerr << "ctoc: cannot read vocab file: " << vp << "\n";
-        return 1;
-    }
-
-    auto vocab = parse_vocab(vocab_json);
-    if (vocab.empty()) {
-        std::cerr << "ctoc: no tokens found in vocab file\n";
-        return 1;
-    }
-
-    // Build trie
+    // Build trie from embedded vocabulary
     Trie trie;
-    for (const auto& token : vocab)
-        trie.insert(token);
+    for (size_t i = 0; i < VOCAB_COUNT; ++i)
+        trie.insert(VOCAB_TOKENS[i]);
 
     // Discover and tokenize files
     auto files = discover_files(input_paths, excluded_dirs, include_exts, trie);
