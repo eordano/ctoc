@@ -15,7 +15,10 @@ SUM        25  68,540
 ---------------------
 ```
 
-Self-contained C++17 binary — no runtime dependencies. Greedy longest-match tokenizer built from 36,495 reverse-engineered Claude tokens. ~**3% error** vs the Anthropic `count_tokens` API across 30 tested files (tiktoken and bytes/4 undercount by 20%+). Processes ~1M tokens/sec including file I/O.
+- Self-contained C++17 binary — no runtime dependencies.
+- Greedy longest-match tokenizer built from 36,495 reverse-engineered Claude tokens.
+- ~**3% error** vs the Anthropic `count_tokens` API across 30 tested files (tiktoken and bytes/4 undercount by 20%+).
+- Processes ~1M tokens/sec including file I/O.
 
 ## Install
 
