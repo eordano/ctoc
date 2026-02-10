@@ -37,6 +37,6 @@ ctoc --exclude-dir vendor .               # skip vendor/
 
 ## How it works
 
-1. At build time, `gen_vocab.py` converts `vocab_tiktoken.json` into a C++ array
+1. At build time, `gen_vocab.py` converts `vocab.json` into a C++ array
 2. At runtime, tokens are inserted into a trie and files are tokenized via greedy longest-match
 3. Vocabulary was extracted by probing Anthropic's `count_tokens` API ~276K times — see [REPORT.md](REPORT.md)
