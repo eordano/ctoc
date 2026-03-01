@@ -1,21 +1,25 @@
 // ctoc — Count Tokens of Code
 // Like cloc, but for Claude tokens.
 //
-// Uses a greedy longest-match tokenizer built from a reverse-engineered
-// vocabulary of 36,495 verified Claude tokens (95-96% accuracy).
+// Uses a greedy longest-match tokenizer built into a double-array tree,
+// from a reverse-engineered vocabulary of 38,360 verified Claude tokens
+// (95-96% accuracy).
 
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "vocab_data.h"
 
@@ -38,72 +42,45 @@ static const std::unordered_set<std::string> DEFAULT_EXCLUDED_DIRS = {
 static constexpr size_t MAX_FILE_SIZE = 1 * 1024 * 1024; // 1 MB
 static constexpr size_t BINARY_CHECK_SIZE = 8192;
 
-// ─── Trie ────────────────────────────────────────────────────────────
+// ─── Tokenizer ──────────────────────────────────────────────────────
 
-struct TrieNode {
-    std::unordered_map<unsigned char, TrieNode*> children;
-    bool is_terminal = false;
+static constexpr uint32_t TERM_BIT = 0x80000000u;
+static constexpr uint32_t IDX_MASK = 0x7FFFFFFFu;
 
-    ~TrieNode() {
-        for (auto& [_, child] : children)
-            delete child;
-    }
-};
+// Returns the longest match length starting at data[pos], minimum 1.
+static inline size_t match_len(const char* data, size_t len, size_t pos) {
+    unsigned char byte = static_cast<unsigned char>(data[pos]);
+    uint32_t t = DA_BASE[0] + byte;
+    if (t >= DA_TRIE_SIZE)
+        return 1;
+    uint32_t c = DA_CHECK[t];
+    if (c == 0xFFFFFFFFu || (c & IDX_MASK) != 0)
+        return 1;
 
-class Trie {
-public:
-    Trie() : root_(new TrieNode()) {}
-    ~Trie() { delete root_; }
+    size_t best = (c & TERM_BIT) ? 1 : 0;
+    uint32_t state = t;
 
-    Trie(const Trie&) = delete;
-    Trie& operator=(const Trie&) = delete;
-
-    void insert(const std::string& token) {
-        TrieNode* node = root_;
-        for (unsigned char c : token) {
-            auto it = node->children.find(c);
-            if (it == node->children.end()) {
-                node->children[c] = new TrieNode();
-                node = node->children[c];
-            } else {
-                node = it->second;
-            }
-        }
-        node->is_terminal = true;
+    for (size_t i = pos + 1; i < len; ++i) {
+        byte = static_cast<unsigned char>(data[i]);
+        t = DA_BASE[state] + byte;
+        if (t >= DA_TRIE_SIZE)
+            break;
+        c = DA_CHECK[t];
+        if (c == 0xFFFFFFFFu || (c & IDX_MASK) != state)
+            break;
+        state = t;
+        if (c & TERM_BIT)
+            best = i - pos + 1;
     }
 
-    // Returns the length of the longest match starting at data[pos], or 0.
-    size_t longest_match(const std::string& data, size_t pos) const {
-        TrieNode* node = root_;
-        size_t best = 0;
-        for (size_t i = pos; i < data.size(); ++i) {
-            auto it = node->children.find(static_cast<unsigned char>(data[i]));
-            if (it == node->children.end())
-                break;
-            node = it->second;
-            if (node->is_terminal)
-                best = i - pos + 1;
-        }
-        return best;
-    }
+    return best ? best : 1;
+}
 
-private:
-    TrieNode* root_;
-};
-
-// ─── Tokenizer ───────────────────────────────────────────────────────
-
-static size_t count_tokens(const std::string& text, const Trie& trie) {
+static size_t count_tokens(const char* data, size_t len) {
     size_t count = 0;
     size_t pos = 0;
-    while (pos < text.size()) {
-        size_t match_len = trie.longest_match(text, pos);
-        if (match_len == 0) {
-            // Unknown byte — count as 1 token (single-byte fallback)
-            ++pos;
-        } else {
-            pos += match_len;
-        }
+    while (pos < len) {
+        pos += match_len(data, len, pos);
         ++count;
     }
     return count;
@@ -111,8 +88,8 @@ static size_t count_tokens(const std::string& text, const Trie& trie) {
 
 // ─── File discovery ──────────────────────────────────────────────────
 
-static bool is_binary(const std::string& data) {
-    size_t check_len = std::min(data.size(), BINARY_CHECK_SIZE);
+static bool is_binary(const char* data, size_t len) {
+    size_t check_len = std::min(len, BINARY_CHECK_SIZE);
     for (size_t i = 0; i < check_len; ++i) {
         if (data[i] == '\0')
             return true;
@@ -120,13 +97,27 @@ static bool is_binary(const std::string& data) {
     return false;
 }
 
-static std::string read_file(const fs::path& path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f)
-        return {};
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
+struct MappedFile {
+    const char* data = nullptr;
+    size_t size = 0;
+    int fd = -1;
+    void close() {
+        if (data) munmap(const_cast<char*>(data), size);
+        if (fd >= 0) ::close(fd);
+        data = nullptr; fd = -1;
+    }
+    ~MappedFile() { close(); }
+    explicit operator bool() const { return data != nullptr; }
+};
+
+static MappedFile map_file(const fs::path& path) {
+    int fd = open(path.c_str(), O_RDONLY);
+    if (fd < 0) return {};
+    struct stat st;
+    if (fstat(fd, &st) < 0 || st.st_size == 0) { ::close(fd); return {}; }
+    auto* p = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (p == MAP_FAILED) { ::close(fd); return {}; }
+    return {static_cast<const char*>(p), static_cast<size_t>(st.st_size), fd};
 }
 
 struct FileEntry {
@@ -159,8 +150,7 @@ static bool is_bazel_dir(const fs::path& path) {
 static std::vector<FileEntry> discover_files(
     const std::vector<std::string>& paths,
     const std::unordered_set<std::string>& excluded_dirs,
-    const std::unordered_set<std::string>& include_exts,
-    const Trie& trie)
+    const std::unordered_set<std::string>& include_exts)
 {
     std::vector<FileEntry> files;
 
@@ -181,12 +171,12 @@ static std::vector<FileEntry> discover_files(
             std::string ext = get_ext(p);
             if (!include_exts.empty() && include_exts.find(ext) == include_exts.end())
                 continue;
-            std::string content = read_file(p);
-            if (content.empty() || is_binary(content))
+            auto mf = map_file(p);
+            if (!mf || is_binary(mf.data, mf.size))
                 continue;
             if (ext.empty())
                 ext = "(none)";
-            files.push_back({p, ext, count_tokens(content, trie)});
+            files.push_back({p, ext, count_tokens(mf.data, mf.size)});
             continue;
         }
 
@@ -226,11 +216,11 @@ static std::vector<FileEntry> discover_files(
             if (!include_exts.empty() && include_exts.find(ext) == include_exts.end())
                 continue;
 
-            std::string content = read_file(it->path());
-            if (content.empty() || is_binary(content))
+            auto mf = map_file(it->path());
+            if (!mf || is_binary(mf.data, mf.size))
                 continue;
 
-            files.push_back({it->path(), ext, count_tokens(content, trie)});
+            files.push_back({it->path(), ext, count_tokens(mf.data, mf.size)});
         }
     }
 
@@ -432,13 +422,8 @@ int main(int argc, char* argv[]) {
     auto excluded_dirs = DEFAULT_EXCLUDED_DIRS;
     excluded_dirs.insert(extra_excluded_dirs.begin(), extra_excluded_dirs.end());
 
-    // Build trie from embedded vocabulary
-    Trie trie;
-    for (size_t i = 0; i < VOCAB_COUNT; ++i)
-        trie.insert(VOCAB_TOKENS[i]);
-
     // Discover and tokenize files
-    auto files = discover_files(input_paths, excluded_dirs, include_exts, trie);
+    auto files = discover_files(input_paths, excluded_dirs, include_exts);
 
     if (files.empty()) {
         std::cerr << "ctoc: no files found\n";

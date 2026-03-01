@@ -13,15 +13,11 @@ genrule(
 
 cc_binary(
     name = "ctoc",
-    srcs = [
-        "ctoc.cc",
-        "vocab_data.cc",
-        "vocab_data.h",
-    ],
+    srcs = ["ctoc.cc", ":gen_vocab"],
 )
 
 cc_test(
     name = "ctoc_smoke_test",
     size = "small",
-    srcs = ["ctoc_smoke_test.cc"],
+    srcs = ["ctoc_smoke_test.cc", ":gen_vocab"],
 )
